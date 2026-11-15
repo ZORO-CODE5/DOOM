@@ -1,0 +1,20 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# NEXUS local state, backups, and sessions
+.nexus/
+
+# VS Code settings
+.vscode/
+
+# Temporary test files created during development
+buggy_app.py
+math_utils.py
+test_math.py
