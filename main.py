@@ -1,15 +1,21 @@
-"""DOOM entry point, interactive loop, and command router."""
+"""DOOM entry point, interactive loop, command router, and autonomous MCP agent."""
 
+import json
 import re
 import sys
+from pathlib import Path
+from typing import Any
+
+from rich.align import Align
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 from context import ProjectContext
+from mcp_client import MCPManager
 from ollama_client import OllamaClient
 from prompts import (
     SUBAGENT_ROLES,
@@ -24,829 +30,606 @@ from snapshots import SnapshotManager
 from storage import SessionStorage
 
 console = Console()
-DEFAULT_MODEL = "qwen2.5-coder:3b"
 
-AVAILABLE_THEMES = {
-    "monokai": "Monokai (Dark / Vibrant)",
-    "dracula": "Dracula (Dark / Purple tones)",
-    "solarized-dark": "Solarized Dark (Teal / Warm)",
-    "github-dark": "GitHub Dark (Modern Dark)",
-    "one-dark": "One Dark (Atom-inspired)",
-}
-CURRENT_THEME = "monokai"
-CURRENT_SUBAGENT = "default"
-
-
-def display_welcome(model_name: str, workspace_name: str, theme_name: str, subagent_role: str):
-    welcome_text = (
-        "[bold cyan]DOOM[/bold cyan] - Local AI Coding Companion\n"
-        "[dim]Tagline: Think. Build. Execute.[/dim]\n\n"
-        f"Active Model:    [green]{model_name}[/green]\n"
-        f"Active Subagent: [cyan]{subagent_role.upper()}[/cyan]\n"
-        f"Workspace:       [yellow]{workspace_name}[/yellow]\n"
-        f"Syntax Theme:    [magenta]{theme_name}[/magenta]\n\n"
-        "Commands:\n"
-        "  [yellow]/subagent <list|set>[/yellow]     - Switch specialized persona (architect, security, tester)\n"
-        "  [yellow]/research <query>[/yellow]        - Search codebase and analyze across files\n"
-        "  [yellow]/plan <task>[/yellow]             - Generate architecture blueprint\n"
-        "  [yellow]/review <path>[/yellow]           - Conduct structured code review\n"
-        "  [yellow]/fix <path>[/yellow]              - Diagnose and generate fixed file\n"
-        "  [yellow]/snapshots [path][/yellow]        - List file snapshots\n"
-        "  [yellow]/undo <path>[/yellow]             - Rollback file to previous snapshot\n"
-        "  [yellow]/model <list|set>[/yellow]        - View or switch active local AI model\n"
-        "  [yellow]/theme <list|set>[/yellow]        - Customize syntax highlighting theme\n"
-        "  [yellow]/files[/yellow]                   - List tracked project files\n"
-        "  [yellow]/read <path>[/yellow]            - View a file in the terminal\n"
-        "  [yellow]/add <path>[/yellow]             - Load a file into AI context\n"
-        "  [yellow]/save <path>[/yellow]            - Save last generated code to disk\n"
-        "  [yellow]/run <command>[/yellow]          - Run terminal command (with approval)\n"
-        "  [yellow]/session <save|load|list>[/yellow] - Manage conversation checkpoints\n"
-        "  [yellow]/clear[/yellow]                   - Reset conversation memory\n"
-        "  [yellow]/help[/yellow]                    - Show command list\n"
-        "  [yellow]/exit[/yellow]                    - Exit DOOM"
-    )
-    console.print(
-        Panel(welcome_text, title="[bold]Welcome[/bold]", border_style="cyan")
-    )
-
-
-def show_help():
-    help_content = """
-### DOOM Commands
-
-* **/subagent list** - View available specialized personas (default, architect, security, tester).
-* **/subagent set <role>** - Activate a specialized subagent for domain-focused reasoning.
-* **/research <query>** - Search across all files in the project and synthesize multi-file analysis.
-* **/plan <task>** - Plan the architecture of a feature before coding.
-* **/review <path>** - Perform a structured audit of a local file.
-* **/fix <path>** - Automatically diagnose errors in a file and generate a complete fix.
-* **/snapshots [path]** - View all saved snapshots.
-* **/undo <path>** - Revert a file to its most recent snapshot.
-* **/model list** - Show all local Ollama models installed on this machine.
-* **/model set <name>** - Switch active LLM on the fly.
-* **/theme list** - Show available syntax highlighting styles.
-* **/theme set <name>** - Change the active code theme.
-* **/files** - List all tracked project files.
-* **/read <path>** - Preview a local file with syntax highlighting.
-* **/add <path>** - Attach a file into active AI context.
-* **/save <path>** - Save the latest AI code snippet to disk.
-* **/run <cmd>** - Safely execute a PowerShell command.
-* **/session save <name>** - Save the current conversation state to disk.
-* **/session load <name>** - Restore a saved conversation session.
-* **/session list** - Show all saved sessions.
-* **/clear** - Clear screen and reset conversation history.
-* **/help** - Display this command cheat sheet.
-* **/exit** (or **/quit**) - Close the session.
+DOOM_BANNER_TEXT = r"""
+  [bold yellow]⚜[/bold yellow]  [bold green]██████╗  ██████╗  ██████╗ ███╗   ███╗[/bold green]  [bold yellow]⚜[/bold yellow]
+     [bold green]██╔══██╗██╔═══██╗██╔═══██╗████╗ ████║[/bold green]      [bold white]ALL CODE BENDS TO DOOM[/bold white]
+     [bold green]██║  ██║██║   ██║██║   ██║██╔████╔██║[/bold green]
+     [bold green]██║  ██║██║   ██║██║   ██║██║╚██╔╝██║[/bold green]
+     [bold green]██████╔╝╚██████╔╝╚██████╔╝██║ ╚═╝ ██║[/bold green]
+     [bold green]╚═════╝  ╚═════╝  ╚═════╝ ╚═╝     ╚═╝[/bold green]
 """
-    console.print(Markdown(help_content))
 
 
-def list_files(project_context: ProjectContext):
-    files = project_context.get_project_files()
-    if not files:
-        console.print("[yellow]No tracked project files found.[/yellow]\n")
-        return
+def print_banner(model_name: str, active_subagent: str, theme: str) -> None:
+    header_content = (
+        f"{DOOM_BANNER_TEXT.strip()}\n"
+        f"[dim green]─────────────────────────────────────────────────────────────────────────────[/dim green]\n"
+        f"  [bold green]CORE:[/bold green] [bold cyan]{model_name}[/bold cyan]   │   "
+        f"[bold green]ROLE:[/bold green] [bold magenta]{active_subagent.upper()}[/bold magenta]"
+    )
 
-    tree_display = f"### Project Files ({len(files)} total)\n"
-    for file_path in files:
-        tree_display += f"* `{file_path}`\n"
-
-    console.print(Markdown(tree_display))
-
-
-def handle_read_command(project_context: ProjectContext, argument: str):
-    if not argument:
-        console.print("[yellow]Usage: /read <filepath>[/yellow]\n")
-        return
-
-    file_path = argument.strip()
-    success, result = project_context.read_file(file_path)
-
-    if not success:
-        console.print(f"[bold red]Error:[/bold red] {result}\n")
-        return
-
-    extension = file_path.split(".")[-1] if "." in file_path else "text"
-    lexer_map = {
-        "py": "python",
-        "json": "json",
-        "md": "markdown",
-        "txt": "text",
-    }
-    lexer = lexer_map.get(extension, "text")
-
-    console.print(f"\n[dim]=== File: {file_path} (Theme: {CURRENT_THEME}) ===[/dim]")
-    syntax_view = Syntax(result, lexer, theme=CURRENT_THEME, line_numbers=True)
-    console.print(syntax_view)
     console.print(
-        f"[dim]=== End of File ({len(result.splitlines())} lines) ===[/dim]\n"
-    )
-
-
-def handle_add_command(
-    project_context: ProjectContext,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-):
-    if not argument:
-        console.print("[yellow]Usage: /add <filepath>[/yellow]\n")
-        return
-
-    file_path = argument.strip()
-    success, result = project_context.read_file(file_path)
-
-    if not success:
-        console.print(f"[bold red]Error:[/bold red] {result}\n")
-        return
-
-    file_context_message = {
-        "role": "user",
-        "content": (
-            f"[Context: File loaded from workspace]\n"
-            f"Filename: {file_path}\n"
-            f"```\n{result}\n```\n"
-            f"I have loaded `{file_path}` into our session. Acknowledge briefly that you have read it."
-        ),
-    }
-    conversation_history.append(file_context_message)
-    conversation_history.append({
-        "role": "assistant",
-        "content": (
-            f"I have loaded and analyzed `{file_path}`. What would you like to"
-            " do with it?"
-        ),
-    })
-
-    console.print(f"[green]Added `{file_path}` to DOOM context.[/green]\n")
-
-
-def extract_code_block(markdown_text: str) -> str:
-    match = re.search(r"```(?:\w+)?\n(.*?)```", markdown_text, re.DOTALL)
-    if match:
-        return match.group(1).rstrip()
-    return markdown_text.strip()
-
-
-def handle_save_command(
-    project_context: ProjectContext,
-    snapshot_manager: SnapshotManager,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-):
-    if not argument:
-        console.print("[yellow]Usage: /save <filepath>[/yellow]\n")
-        return
-
-    target_file = argument.strip()
-    last_assistant_msg = None
-    for msg in reversed(conversation_history):
-        if msg["role"] == "assistant":
-            last_assistant_msg = msg["content"]
-            break
-
-    if not last_assistant_msg:
-        console.print("[yellow]No AI-generated response found to save.[/yellow]\n")
-        return
-
-    code_to_write = extract_code_block(last_assistant_msg)
-    file_exists = project_context.file_exists(target_file)
-    action_label = (
-        "[bold red]OVERWRITE[/bold red]"
-        if file_exists
-        else "[bold green]CREATE[/bold green]"
-    )
-
-    prompt_question = f"Do you want DOOM to {action_label} '[cyan]{target_file}[/cyan]' ({len(code_to_write.splitlines())} lines)?"
-    if not Confirm.ask(prompt_question, default=False):
-        console.print("[dim]Save cancelled by user.[/dim]\n")
-        return
-
-    if file_exists:
-        snap_ok, snap_msg = snapshot_manager.create_snapshot(target_file)
-        if snap_ok:
-            console.print(f"[dim]{snap_msg}[/dim]")
-
-    success, message = project_context.write_file(target_file, code_to_write)
-    if success:
-        console.print(f"[bold green]Success:[/bold green] {message}\n")
-    else:
-        console.print(f"[bold red]Failed:[/bold red] {message}\n")
-
-
-def handle_run_command(
-    runner: CommandRunner,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-    last_error_holder: dict[str, str],
-):
-    if not argument:
-        console.print("[yellow]Usage: /run <command>[/yellow]\n")
-        return
-
-    command = argument.strip()
-    is_safe, reason = runner.is_safe(command)
-    if not is_safe:
-        console.print(f"[bold red]Security Warning:[/bold red] {reason}\n")
-        return
-
-    confirm = Confirm.ask(
-        f"Execute command: [bold cyan]{command}[/bold cyan]?", default=False
-    )
-    if not confirm:
-        console.print("[dim]Execution cancelled by user.[/dim]\n")
-        return
-
-    console.print("[dim]Executing in PowerShell...[/dim]")
-    result = runner.execute(command)
-
-    if result["stdout"]:
-        console.print(
-            f"\n[bold green]Output ({result['elapsed']}s):[/bold green]"
+        Panel(
+            Align.center(Text.from_markup(header_content)),
+            border_style="bold green",
+            subtitle="[dim green]Type /help for commands or /exit to quit.[/dim green]",
+            padding=(0, 2),
         )
-        console.print(result["stdout"])
-
-    if result["stderr"]:
-        if result["returncode"] != 0:
-            console.print(
-                f"\n[bold red]Error Output ({result['elapsed']}s):[/bold red]"
-            )
-            console.print(result["stderr"])
-            last_error_holder["error"] = result["stderr"]
-        else:
-            console.print(
-                f"\n[dim cyan]Execution Log ({result['elapsed']}s):[/dim cyan]"
-            )
-            console.print(result["stderr"])
-
-    if not result["stdout"] and not result["stderr"]:
-        console.print(
-            f"[dim]Command finished with return code {result['returncode']}"
-            f" ({result['elapsed']}s).[/dim]"
-        )
-
-    console.print()
-
-    if result["returncode"] != 0 and result["stderr"]:
-        feedback = {
-            "role": "user",
-            "content": (
-                f"[Terminal Execution Error]\n"
-                f"Command: {command}\n"
-                f"Exit Code: {result['returncode']}\n"
-                f"Error:\n{result['stderr']}\n\n"
-                "Please analyze this error and tell me how to fix it."
-            ),
-        }
-        conversation_history.append(feedback)
-        console.print(
-            "[dim]Command error recorded into conversation context.[/dim]\n"
-        )
-
-
-def handle_plan_command(
-    ai_client: OllamaClient,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-):
-    if not argument:
-        console.print("[yellow]Usage: /plan <task description>[/yellow]\n")
-        return
-
-    task = argument.strip()
-    plan_message = get_planning_message(task)
-    conversation_history.append(plan_message)
-
-    console.print(f"\n[bold magenta]DOOM [PLANNING][/bold magenta]:")
-    collected_response = ""
-
-    with console.status(
-        "[dim magenta]Formulating implementation plan...[/dim magenta]",
-        spinner="dots",
-    ):
-        tokens = []
-        for token in ai_client.stream_chat(conversation_history):
-            tokens.append(token)
-        collected_response = "".join(tokens)
-
-    console.print(Markdown(collected_response))
-    console.print()
-
-    conversation_history.append(
-        {"role": "assistant", "content": collected_response}
     )
 
 
-def handle_review_command(
-    ai_client: OllamaClient,
-    project_context: ProjectContext,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-):
-    if not argument:
-        console.print("[yellow]Usage: /review <filepath>[/yellow]\n")
-        return
-
-    file_path = argument.strip()
-    success, content = project_context.read_file(file_path)
-
-    if not success:
-        console.print(f"[bold red]Error:[/bold red] {content}\n")
-        return
-
-    review_message = get_review_message(file_path, content)
-    conversation_history.append(review_message)
-
-    console.print(f"\n[bold blue]DOOM [CODE REVIEW: {file_path}][/bold blue]:")
-    collected_response = ""
-
-    with console.status(
-        f"[dim blue]Reviewing {file_path}...[/dim blue]",
-        spinner="dots",
-    ):
-        tokens = []
-        for token in ai_client.stream_chat(conversation_history):
-            tokens.append(token)
-        collected_response = "".join(tokens)
-
-    console.print(Markdown(collected_response))
-    console.print()
-
-    conversation_history.append(
-        {"role": "assistant", "content": collected_response}
+def display_help() -> None:
+    table = Table(
+        title="COMMAND PROTOCOLS",
+        border_style="green",
+        header_style="bold yellow",
+        show_lines=True,
     )
+    table.add_column("Command", style="bold green", no_wrap=True)
+    table.add_column("Arguments", style="yellow")
+    table.add_column("Description", style="white")
 
+    commands = [
+        ("/help", "", "Show this commands reference table"),
+        ("/exit", "", "Exit the DOOM interactive session"),
+        ("/clear", "", "Clear conversation history and terminal screen"),
+        ("/files", "", "List all tracked files in the workspace"),
+        ("/read", "<path>", "Display file contents with syntax highlighting"),
+        ("/add", "<path>", "Load a local file into the AI's active context"),
+        ("/save", "<path>", "Save the last generated code block to a file"),
+        ("/undo", "<path>", "Revert a file to its previous backup snapshot"),
+        ("/snapshots", "[path]", "List saved file snapshots and timestamps"),
+        ("/run", "<cmd>", "Execute a shell command with safety confirmation"),
+        ("/plan", "<task>", "Generate a structured implementation plan"),
+        ("/review", "<path>", "Perform a 4-point code quality and security review"),
+        ("/fix", "<path>", "Analyze runtime errors and generate a corrected file"),
+        ("/research", "<query>", "Search symbols across files and analyze usage"),
+        ("/subagent", "list | set <role>", "Inspect or switch active persona"),
+        ("/session", "save | load | list", "Persist or restore named chat sessions"),
+        ("/model", "list | set <name>", "List or switch active Ollama models"),
+        ("/theme", "list | set <theme>", "Inspect or change syntax highlighting theme"),
+        ("/mcp", "list | call <tool> <args>", "Inspect connected MCP servers or invoke tools"),
+    ]
 
-def handle_fix_command(
-    ai_client: OllamaClient,
-    project_context: ProjectContext,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-    last_error_holder: dict[str, str],
-):
-    if not argument:
-        console.print("[yellow]Usage: /fix <filepath>[/yellow]\n")
-        return
-
-    file_path = argument.strip()
-    success, content = project_context.read_file(file_path)
-
-    if not success:
-        console.print(f"[bold red]Error:[/bold red] {content}\n")
-        return
-
-    error_ctx = last_error_holder.get("error", "")
-    fix_message = get_fix_message(file_path, content, error_ctx)
-    conversation_history.append(fix_message)
-
-    console.print(f"\n[bold yellow]DOOM [DIAGNOSTICS & FIX: {file_path}][/bold yellow]:")
-    collected_response = ""
-
-    with console.status(
-        f"[dim yellow]Diagnosing and fixing {file_path}...[/dim yellow]",
-        spinner="dots",
-    ):
-        tokens = []
-        for token in ai_client.stream_chat(conversation_history):
-            tokens.append(token)
-        collected_response = "".join(tokens)
-
-    console.print(Markdown(collected_response))
-    console.print()
-
-    conversation_history.append(
-        {"role": "assistant", "content": collected_response}
-    )
-    console.print(f"[dim]Tip: Type '[cyan]/save {file_path}[/cyan]' to apply this fix to disk.[/dim]\n")
-
-
-def handle_research_command(
-    ai_client: OllamaClient,
-    project_context: ProjectContext,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-):
-    if not argument:
-        console.print("[yellow]Usage: /research <query/symbol>[/yellow]\n")
-        return
-
-    query = argument.strip()
-    matches = project_context.search_codebase(query)
-
-    if not matches:
-        console.print(f"[yellow]No occurrences of '{query}' found across project files.[/yellow]\n")
-        return
-
-    table = Table(title=f"Codebase Matches: '{query}'", border_style="cyan")
-    table.add_column("File", style="cyan")
-    table.add_column("Line", justify="right", style="magenta")
-    table.add_column("Snippet", style="dim")
-
-    for item in matches[:10]:
-        table.add_row(str(item["file"]), str(item["line"]), str(item["snippet"]))
+    for cmd, args, desc in commands:
+        table.add_row(cmd, args, desc)
 
     console.print(table)
-    console.print()
-
-    research_msg = get_research_message(query, matches)
-    conversation_history.append(research_msg)
-
-    console.print(f"[bold cyan]DOOM [RESEARCH ANALYSIS: '{query}']:[/bold cyan]")
-    collected_response = ""
-
-    with console.status(
-        f"[dim cyan]Synthesizing findings across {len(matches)} occurrences...[/dim cyan]",
-        spinner="dots",
-    ):
-        tokens = []
-        for token in ai_client.stream_chat(conversation_history):
-            tokens.append(token)
-        collected_response = "".join(tokens)
-
-    console.print(Markdown(collected_response))
-    console.print()
-
-    conversation_history.append(
-        {"role": "assistant", "content": collected_response}
-    )
 
 
-def handle_subagent_command(argument: str, conversation_history: list[dict[str, str]]) -> str:
-    """Manages viewing and switching specialized subagent personas."""
-    global CURRENT_SUBAGENT
-    parts = argument.strip().split(maxsplit=1)
-    subcmd = parts[0].lower() if parts else ""
-    param = parts[1].strip().lower() if len(parts) > 1 else ""
-
-    if subcmd == "list" or not subcmd:
-        table = Table(title="Available Subagents", border_style="cyan")
-        table.add_column("Role", style="cyan")
-        table.add_column("Description", style="white")
-        table.add_column("Status", style="bold")
-
-        descriptions = {
-            "default": "Balanced coding companion for everyday programming and explanations",
-            "architect": "System design, modular structures, separation of concerns, and API planning",
-            "security": "Vulnerability scanning, input sanitization, OWASP checks, and safe execution",
-            "tester": "Unit testing suites, edge cases, regression coverage, and mocks",
-        }
-
-        for role in SUBAGENT_ROLES:
-            status_text = "[green]* Active[/green]" if role == CURRENT_SUBAGENT else "[dim]Available[/dim]"
-            table.add_row(role, descriptions.get(role, ""), status_text)
-
-        console.print(table)
-        console.print("[dim]Use '/subagent set <role>' to switch active persona.[/dim]\n")
-        return CURRENT_SUBAGENT
-
-    elif subcmd == "set":
-        if param not in SUBAGENT_ROLES:
-            console.print(
-                f"[yellow]Unknown role '{param}'. Available: {', '.join(SUBAGENT_ROLES.keys())}[/yellow]\n"
-            )
-            return CURRENT_SUBAGENT
-
-        CURRENT_SUBAGENT = param
-        # Update system instruction in the active conversation
-        conversation_history[0] = {"role": "system", "content": SUBAGENT_ROLES[CURRENT_SUBAGENT]}
-        console.print(f"[bold green]Active Subagent changed to:[/bold green] [cyan]{CURRENT_SUBAGENT.upper()}[/cyan]\n")
-        return CURRENT_SUBAGENT
-
-    else:
-        console.print("[yellow]Usage: /subagent <list|set> [role][/yellow]\n")
-        return CURRENT_SUBAGENT
+def extract_last_code_block(text: str) -> str | None:
+    pattern = r"```(?:\w+)?\n(.*?)```"
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        return matches[-1].rstrip()
+    return None
 
 
-def handle_snapshots_command(snapshot_manager: SnapshotManager, argument: str):
-    target_filter = argument.strip()
-    snaps = snapshot_manager.list_snapshots(target_filter)
-
-    if not snaps:
-        console.print("[dim]No snapshots found.[/dim]\n")
-        return
-
-    table = Table(title="File Snapshots", border_style="cyan")
-    table.add_column("File", style="cyan")
-    table.add_column("Snapshot Date", style="dim")
-    table.add_column("Backup Path", style="dim")
-
-    for s in snaps:
-        table.add_row(s["original"], s["timestamp"], s["backup_path"])
-
-    console.print(table)
-    console.print()
-
-
-def handle_undo_command(snapshot_manager: SnapshotManager, argument: str):
-    if not argument:
-        console.print("[yellow]Usage: /undo <filepath>[/yellow]\n")
-        return
-
-    file_path = argument.strip()
-    confirm = Confirm.ask(
-        f"Revert '[cyan]{file_path}[/cyan]' to its previous snapshot?", default=False
-    )
-    if not confirm:
-        console.print("[dim]Rollback cancelled by user.[/dim]\n")
-        return
-
-    success, msg = snapshot_manager.restore_latest_snapshot(file_path)
-    if success:
-        console.print(f"[bold green]Success:[/bold green] {msg}\n")
-    else:
-        console.print(f"[bold red]Error:[/bold red] {msg}\n")
+def format_mcp_tools_for_ollama(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Converts MCP tool declarations into Ollama function calling definitions."""
+    ollama_tools = []
+    for tool in mcp_tools:
+        ollama_tools.append({
+            "type": "function",
+            "function": {
+                "name": tool.get("name"),
+                "description": tool.get("description", ""),
+                "parameters": tool.get(
+                    "inputSchema",
+                    {
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+            },
+        })
+    return ollama_tools
 
 
-def handle_model_command(ai_client: OllamaClient, argument: str):
-    parts = argument.strip().split(maxsplit=1)
-    subcmd = parts[0].lower() if parts else ""
-    param = parts[1].strip() if len(parts) > 1 else ""
+def parse_tool_calls_from_response(msg_dict: dict[str, Any], available_tool_names: set[str]) -> list[dict[str, Any]]:
+    """Extracts tool calls from native tool_calls, markdown fences, or raw JSON text."""
+    raw_calls = msg_dict.get("tool_calls") or []
+    calls = []
 
-    if subcmd == "list" or not subcmd:
-        models = ai_client.get_installed_models()
-        if not models:
-            console.print("[yellow]No local Ollama models found.[/yellow]\n")
-            return
-
-        table = Table(title="Installed Ollama Models", border_style="cyan")
-        table.add_column("Model Name", style="cyan")
-        table.add_column("Status", style="bold")
-
-        for m in models:
-            is_active = (m == ai_client.model_name) or (ai_client.model_name in m)
-            status_text = "[green]* Active[/green]" if is_active else "[dim]Available[/dim]"
-            table.add_row(m, status_text)
-
-        console.print(table)
-        console.print("[dim]Use '/model set <name>' to switch models.[/dim]\n")
-
-    elif subcmd == "set":
-        if not param:
-            console.print("[yellow]Usage: /model set <model_name>[/yellow]\n")
-            return
-
-        large_model_tokens = ["14b", "32b", "70b"]
-        if any(tok in param.lower() for tok in large_model_tokens):
-            console.print(
-                "[yellow]Advisory:[/yellow] This model may exceed your 4 GB VRAM limit, "
-                "which could result in slower system responsiveness."
-            )
-
-        success, result = ai_client.switch_model(param)
-        if success:
-            console.print(f"[bold green]Switched active model to:[/bold green] [cyan]{result}[/cyan]\n")
+    for call in raw_calls:
+        if isinstance(call, dict):
+            func = call.get("function", {})
+            name = func.get("name")
+            args = func.get("arguments", {})
         else:
-            console.print(f"[bold red]Error:[/bold red] {result}\n")
+            func = getattr(call, "function", None)
+            name = getattr(func, "name", None) if func else None
+            args = getattr(func, "arguments", {}) if func else {}
 
-    else:
-        console.print("[yellow]Usage: /model <list|set> [name][/yellow]\n")
+        if name and name in available_tool_names:
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            calls.append({"name": name, "arguments": args})
+
+    if calls:
+        return calls
+
+    content = (msg_dict.get("content") or "").strip()
+    if not content:
+        return []
+
+    candidates = []
+
+    fence_matches = re.findall(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL | re.IGNORECASE)
+    candidates.extend(fence_matches)
+
+    tag_matches = re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", content, re.DOTALL | re.IGNORECASE)
+    candidates.extend(tag_matches)
+
+    first_brace = content.find("{")
+    last_brace = content.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidates.append(content[first_brace : last_brace + 1])
+
+    candidates.append(content)
+
+    for candidate in candidates:
+        candidate_clean = candidate.strip()
+        try:
+            data = json.loads(candidate_clean)
+            if isinstance(data, dict) and data.get("name") in available_tool_names:
+                args = data.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                return [{"name": data["name"], "arguments": args}]
+        except Exception:
+            continue
+
+    return []
 
 
-def handle_theme_command(argument: str):
-    global CURRENT_THEME
-    parts = argument.strip().split(maxsplit=1)
-    subcmd = parts[0].lower() if parts else ""
-    param = parts[1].strip().lower() if len(parts) > 1 else ""
+def handle_chat_turn(
+    user_input: str,
+    messages: list[dict[str, Any]],
+    ollama_client: OllamaClient,
+    mcp: MCPManager,
+) -> str:
+    """Manages chat turn with support for autonomous multi-step tool calls."""
+    messages.append({"role": "user", "content": user_input})
+    all_tools = mcp.get_all_tools()
+    ollama_tools = format_mcp_tools_for_ollama(all_tools) if all_tools else None
+    available_tool_names = {t.get("name") for t in all_tools if t.get("name")}
 
-    if subcmd == "list" or not subcmd:
-        table = Table(title="Available Code Themes", border_style="magenta")
-        table.add_column("Theme Key", style="magenta")
-        table.add_column("Description", style="white")
-        table.add_column("Status", style="bold")
-
-        for key, desc in AVAILABLE_THEMES.items():
-            status_text = "[green]* Active[/green]" if key == CURRENT_THEME else "[dim]Available[/dim]"
-            table.add_row(key, desc, status_text)
-
-        console.print(table)
-        console.print("[dim]Use '/theme set <key>' to change theme.[/dim]\n")
-
-    elif subcmd == "set":
-        if param not in AVAILABLE_THEMES:
-            console.print(
-                f"[yellow]Unknown theme '{param}'. Available: {', '.join(AVAILABLE_THEMES.keys())}[/yellow]\n"
-            )
-            return
-
-        CURRENT_THEME = param
-        console.print(f"[bold green]Syntax theme set to:[/bold green] [magenta]{param}[/magenta]\n")
-
-    else:
-        console.print("[yellow]Usage: /theme <list|set> [name][/yellow]\n")
-
-
-def handle_session_command(
-    storage: SessionStorage,
-    ai_client: OllamaClient,
-    conversation_history: list[dict[str, str]],
-    argument: str,
-) -> list[dict[str, str]]:
-    parts = argument.strip().split(maxsplit=1)
-    subcmd = parts[0].lower() if parts else ""
-    param = parts[1].strip() if len(parts) > 1 else ""
-
-    if subcmd == "save":
-        if not param:
-            console.print("[yellow]Usage: /session save <session_name>[/yellow]\n")
-            return conversation_history
-        success, msg = storage.save_session(
-            param, ai_client.model_name, conversation_history
-        )
-        if success:
-            console.print(f"[bold green]Success:[/bold green] {msg}\n")
-        else:
-            console.print(f"[bold red]Error:[/bold red] {msg}\n")
-        return conversation_history
-
-    elif subcmd == "load":
-        if not param:
-            console.print("[yellow]Usage: /session load <session_name>[/yellow]\n")
-            return conversation_history
-        success, result = storage.load_session(param)
-        if success:
-            console.print(
-                f"[bold green]Success:[/bold green] Loaded session '{param}'"
-                f" ({len(result)} turns restored).\n"
-            )
-            return result
-        else:
-            console.print(f"[bold red]Error:[/bold red] {result}\n")
-            return conversation_history
-
-    elif subcmd == "list":
-        sessions = storage.list_sessions()
-        if not sessions:
-            console.print("[dim]No saved sessions found.[/dim]\n")
-            return conversation_history
-
-        table = Table(title="Saved DOOM Sessions", border_style="cyan")
-        table.add_column("Session Name", style="cyan")
-        table.add_column("Saved Date", style="dim")
-        table.add_column("History Length", justify="right")
-
-        for s in sessions:
-            table.add_row(s["name"], s["date"], f"{s['turns']} messages")
-
-        console.print(table)
+    if not ollama_tools:
+        console.print("[bold green]DOOM:[/bold green] ", end="")
+        collected = []
+        for chunk in ollama_client.stream_chat(messages):
+            console.print(chunk, end="")
+            collected.append(chunk)
         console.print()
-        return conversation_history
+        response_text = "".join(collected)
+        messages.append({"role": "assistant", "content": response_text})
+        return response_text
 
-    else:
-        console.print("[yellow]Usage: /session <save|load|list> [name][/yellow]\n")
-        return conversation_history
+    max_steps = 5
+    step = 0
+    while step < max_steps:
+        step += 1
+        raw_resp = ollama_client.chat_with_tools(messages, ollama_tools)
+
+        if hasattr(raw_resp, "message"):
+            raw_msg = raw_resp.message
+            msg = {
+                "role": getattr(raw_msg, "role", "assistant"),
+                "content": getattr(raw_msg, "content", "") or "",
+                "tool_calls": getattr(raw_msg, "tool_calls", None),
+            }
+        elif isinstance(raw_resp, dict):
+            raw_msg = raw_resp.get("message", {})
+            msg = {
+                "role": raw_msg.get("role", "assistant"),
+                "content": raw_msg.get("content", "") or "",
+                "tool_calls": raw_msg.get("tool_calls", None),
+            }
+        else:
+            msg = {"role": "assistant", "content": str(raw_resp), "tool_calls": None}
+
+        tool_calls = parse_tool_calls_from_response(msg, available_tool_names)
+
+        if not tool_calls:
+            content = msg.get("content", "")
+            console.print(f"[bold green]DOOM:[/bold green] {content}")
+            messages.append({"role": "assistant", "content": content})
+            return content
+
+        messages.append({
+            "role": "assistant",
+            "content": msg.get("content", ""),
+        })
+
+        for call in tool_calls:
+            func_name = call["name"]
+            func_args = call.get("arguments", {})
+
+            console.print(
+                f"[dim yellow]Using Tool:[/dim yellow] [bold green]{func_name}[/bold green]({json.dumps(func_args)})"
+            )
+            tool_output = mcp.call_tool(func_name, func_args)
+
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"[Tool Result from {func_name}]: {tool_output}\n"
+                    "Now provide a direct, concise response explaining this result to the user."
+                ),
+            })
+
+    console.print("[yellow]Reached maximum tool execution turns.[/yellow]")
+    return ""
 
 
-def main():
-    global CURRENT_SUBAGENT
-    workspace = ProjectContext()
-    runner = CommandRunner(working_dir=workspace.root_path)
-    storage = SessionStorage(workspace_root=workspace.root_path)
-    snapshot_manager = SnapshotManager(workspace_root=workspace.root_path)
-    last_error_holder: dict[str, str] = {}
+def main() -> None:
+    context = ProjectContext(Path.cwd())
+    runner = CommandRunner(context.root_path)
+    snapshots = SnapshotManager(context.root_path)
+    storage = SessionStorage(context.root_path)
+    ollama_client = OllamaClient()
 
-    ai_client = OllamaClient(model_name=DEFAULT_MODEL)
-    display_welcome(ai_client.model_name, workspace.root_path.name, CURRENT_THEME, CURRENT_SUBAGENT)
+    mcp = MCPManager(context.root_path)
+    mcp.load_servers()
 
-    with console.status("[cyan]Connecting to Ollama...[/cyan]"):
-        is_ready, message = ai_client.verify_connection()
+    current_theme = "monokai"
+    active_subagent = "default"
+    messages = get_initial_messages(active_subagent)
+    last_assistant_response = ""
+    last_run_error = ""
 
-    if not is_ready:
-        console.print(f"[bold red]Connection Error:[/bold red] {message}")
-        sys.exit(1)
-
-    console.print("[green]Ready.[/green] Ask a coding question or enter a command.\n")
-
-    conversation_history = get_initial_messages(CURRENT_SUBAGENT)
+    console.clear()
+    print_banner(ollama_client.model_name, active_subagent, current_theme)
 
     while True:
         try:
-            user_input = Prompt.ask("[bold cyan]DOOM[/bold cyan]").strip()
+            user_input = Prompt.ask(
+                "\n[bold green]doom[/bold green][yellow]@[/yellow][bold green]latveria[/bold green]:[bold white]~[/bold white][bold green]#[/bold green]"
+            ).strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Doom withdraws. Session terminated.[/dim]")
+            break
 
-            if not user_input:
-                continue
+        if not user_input:
+            continue
 
-            parts = user_input.split(maxsplit=1)
+        if user_input.startswith("/"):
+            parts = user_input.split(maxsplit=3)
             cmd = parts[0].lower()
-            arg = parts[1] if len(parts) > 1 else ""
+            arg1 = parts[1] if len(parts) > 1 else ""
+            arg2 = parts[2] if len(parts) > 2 else ""
+            arg3 = parts[3] if len(parts) > 3 else ""
 
-            if cmd in ["/exit", "/quit"]:
-                console.print("[dim]Shutting down DOOM. Happy coding![/dim]")
+            if cmd in ("/exit", "/quit"):
+                console.print("[dim]Doom withdraws.[/dim]")
                 break
 
-            if cmd == "/clear":
+            elif cmd == "/help":
+                display_help()
+
+            elif cmd == "/clear":
+                messages = get_initial_messages(active_subagent)
+                last_assistant_response = ""
+                last_run_error = ""
                 console.clear()
-                conversation_history = get_initial_messages(CURRENT_SUBAGENT)
-                last_error_holder.clear()
-                display_welcome(ai_client.model_name, workspace.root_path.name, CURRENT_THEME, CURRENT_SUBAGENT)
-                console.print("[dim]Conversation history reset.[/dim]\n")
-                continue
+                print_banner(ollama_client.model_name, active_subagent, current_theme)
+                console.print("[green]Memory buffer purged. Screen wiped.[/green]")
 
-            if cmd == "/help":
-                show_help()
-                continue
+            elif cmd == "/files":
+                get_files_fn = getattr(context, "get_project_files", getattr(context, "list_files", None))
+                files = get_files_fn() if get_files_fn else []
+                if not files:
+                    console.print("[yellow]No files found in workspace.[/yellow]")
+                else:
+                    table = Table(title="Workspace Archives", border_style="green", header_style="bold yellow")
+                    table.add_column("File Path", style="bold green")
+                    for file_path in files:
+                        table.add_row(str(file_path))
+                    console.print(table)
 
-            if cmd == "/files":
-                list_files(workspace)
-                continue
+            elif cmd == "/read":
+                if not arg1:
+                    console.print("[red]Usage: /read <filepath>[/red]")
+                    continue
+                content = context.read_file(arg1)
+                if content is None:
+                    console.print(f"[red]Could not read file: {arg1}[/red]")
+                else:
+                    syntax = Syntax(
+                        content,
+                        Path(arg1).suffix.lstrip(".") or "text",
+                        theme=current_theme,
+                        line_numbers=True,
+                    )
+                    console.print(Panel(syntax, title=f"⚜ {arg1} ⚜", border_style="green"))
 
-            if cmd == "/read":
-                handle_read_command(workspace, arg)
-                continue
+            elif cmd == "/add":
+                if not arg1:
+                    console.print("[red]Usage: /add <filepath>[/red]")
+                    continue
+                content = context.read_file(arg1)
+                if content is None:
+                    console.print(f"[red]Could not read file: {arg1}[/red]")
+                else:
+                    messages.append({
+                        "role": "user",
+                        "content": f"Here is the content of `{arg1}`:\n\n```{Path(arg1).suffix.lstrip('.')}\n{content}\n```",
+                    })
+                    console.print(f"[green]Added `{arg1}` to context.[/green]")
 
-            if cmd == "/add":
-                handle_add_command(workspace, conversation_history, arg)
-                continue
+            elif cmd == "/save":
+                if not arg1:
+                    console.print("[red]Usage: /save <filepath>[/red]")
+                    continue
+                code = extract_last_code_block(last_assistant_response)
+                if not code:
+                    console.print("[red]No code block found in the last assistant response.[/red]")
+                    continue
 
-            if cmd == "/save":
-                handle_save_command(
-                    workspace, snapshot_manager, conversation_history, arg
-                )
-                continue
+                resolve_fn = getattr(context, "resolve_path", lambda p: context.root_path / p)
+                target_path = resolve_fn(arg1)
+                if target_path.exists():
+                    snapshots.create_snapshot(target_path)
+                    confirm = Confirm.ask(f"[yellow]Overwrite existing file `{arg1}`?[/yellow]")
+                    if not confirm:
+                        console.print("[dim]Save canceled.[/dim]")
+                        continue
 
-            if cmd == "/run":
-                handle_run_command(
-                    runner, conversation_history, arg, last_error_holder
-                )
-                continue
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(code, encoding="utf-8")
+                console.print(f"[green]Saved code block to `{arg1}`.[/green]")
 
-            if cmd == "/plan":
-                handle_plan_command(ai_client, conversation_history, arg)
-                continue
+            elif cmd == "/undo":
+                if not arg1:
+                    console.print("[red]Usage: /undo <filepath>[/red]")
+                    continue
+                resolve_fn = getattr(context, "resolve_path", lambda p: context.root_path / p)
+                target_path = resolve_fn(arg1)
+                success = snapshots.restore_latest(target_path)
+                if success:
+                    console.print(f"[green]Restored `{arg1}` from latest snapshot.[/green]")
+                else:
+                    console.print(f"[red]No snapshots found for `{arg1}`.[/red]")
 
-            if cmd == "/review":
-                handle_review_command(
-                    ai_client, workspace, conversation_history, arg
-                )
-                continue
+            elif cmd == "/snapshots":
+                all_snapshots = snapshots.list_snapshots(arg1 if arg1 else None)
+                if not all_snapshots:
+                    console.print("[yellow]No snapshots found.[/yellow]")
+                else:
+                    table = Table(title="Latverian Snapshots", border_style="green", header_style="bold yellow")
+                    table.add_column("Target File", style="bold green")
+                    table.add_column("Backup File", style="dim white")
+                    table.add_column("Timestamp", style="yellow")
+                    for snap in all_snapshots:
+                        table.add_row(snap["target_file"], snap["backup_name"], snap["timestamp"])
+                    console.print(table)
 
-            if cmd == "/fix":
-                handle_fix_command(
-                    ai_client,
-                    workspace,
-                    conversation_history,
-                    arg,
-                    last_error_holder,
-                )
-                continue
+            elif cmd == "/run":
+                command_str = user_input[4:].strip()
+                if not command_str:
+                    console.print("[red]Usage: /run <command>[/red]")
+                    continue
 
-            if cmd == "/research":
-                handle_research_command(
-                    ai_client, workspace, conversation_history, arg
-                )
-                continue
+                is_safe, reason = runner.is_safe(command_str)
+                if not is_safe:
+                    console.print(f"[bold red]Command Blocked:[/bold red] {reason}")
+                    continue
 
-            if cmd == "/subagent":
-                CURRENT_SUBAGENT = handle_subagent_command(arg, conversation_history)
-                continue
+                if not Confirm.ask(f"[yellow]Execute decree: `{command_str}`?[/yellow]"):
+                    console.print("[dim]Command execution canceled.[/dim]")
+                    continue
 
-            if cmd == "/snapshots":
-                handle_snapshots_command(snapshot_manager, arg)
-                continue
+                result = runner.execute(command_str)
+                if result.stdout:
+                    console.print(Panel(result.stdout.strip(), title="stdout", border_style="green"))
+                if result.stderr:
+                    console.print(Panel(result.stderr.strip(), title="stderr", border_style="red"))
+                    last_run_error = result.stderr.strip()
+                console.print(f"[dim]Exited with code {result.returncode} in {result.duration:.2f}s[/dim]")
 
-            if cmd == "/undo":
-                handle_undo_command(snapshot_manager, arg)
-                continue
+            elif cmd == "/plan":
+                task_description = user_input[5:].strip()
+                if not task_description:
+                    console.print("[red]Usage: /plan <task description>[/red]")
+                    continue
+                plan_prompt = get_planning_message(task_description)
+                messages.append({"role": "user", "content": plan_prompt})
+                console.print("[bold green]Doom strategizes...[/bold green]")
+                response_stream = ollama_client.stream_chat(messages)
+                collected = []
+                for chunk in response_stream:
+                    console.print(chunk, end="")
+                    collected.append(chunk)
+                console.print()
+                last_assistant_response = "".join(collected)
+                messages.append({"role": "assistant", "content": last_assistant_response})
 
-            if cmd == "/model":
-                handle_model_command(ai_client, arg)
-                continue
+            elif cmd == "/review":
+                if not arg1:
+                    console.print("[red]Usage: /review <filepath>[/red]")
+                    continue
+                content = context.read_file(arg1)
+                if content is None:
+                    console.print(f"[red]Could not read file: {arg1}[/red]")
+                    continue
+                review_prompt = get_review_message(arg1, content)
+                messages.append({"role": "user", "content": review_prompt})
+                console.print(f"[bold green]Doom audits {arg1}...[/bold green]")
+                response_stream = ollama_client.stream_chat(messages)
+                collected = []
+                for chunk in response_stream:
+                    console.print(chunk, end="")
+                    collected.append(chunk)
+                console.print()
+                last_assistant_response = "".join(collected)
+                messages.append({"role": "assistant", "content": last_assistant_response})
 
-            if cmd == "/theme":
-                handle_theme_command(arg)
-                continue
+            elif cmd == "/fix":
+                if not arg1:
+                    console.print("[red]Usage: /fix <filepath>[/red]")
+                    continue
+                content = context.read_file(arg1)
+                if content is None:
+                    console.print(f"[red]Could not read file: {arg1}[/red]")
+                    continue
+                fix_prompt = get_fix_message(arg1, content, last_run_error)
+                messages.append({"role": "user", "content": fix_prompt})
+                console.print(f"[bold green]Doom repairs {arg1}...[/bold green]")
+                response_stream = ollama_client.stream_chat(messages)
+                collected = []
+                for chunk in response_stream:
+                    console.print(chunk, end="")
+                    collected.append(chunk)
+                console.print()
+                last_assistant_response = "".join(collected)
+                messages.append({"role": "assistant", "content": last_assistant_response})
 
-            if cmd == "/session":
-                conversation_history = handle_session_command(
-                    storage, ai_client, conversation_history, arg
-                )
-                continue
+            elif cmd == "/research":
+                query = user_input[9:].strip()
+                if not query:
+                    console.print("[red]Usage: /research <query>[/red]")
+                    continue
+                search_fn = getattr(context, "search_codebase", None)
+                search_results = search_fn(query) if search_fn else []
+                research_prompt = get_research_message(query, search_results)
+                messages.append({"role": "user", "content": research_prompt})
+                console.print(f"[bold green]Doom investigates '{query}'...[/bold green]")
+                response_stream = ollama_client.stream_chat(messages)
+                collected = []
+                for chunk in response_stream:
+                    console.print(chunk, end="")
+                    collected.append(chunk)
+                console.print()
+                last_assistant_response = "".join(collected)
+                messages.append({"role": "assistant", "content": last_assistant_response})
 
-            # Standard chat flow
-            conversation_history.append({"role": "user", "content": user_input})
+            elif cmd == "/subagent":
+                if arg1 == "list":
+                    table = Table(title="Available Subagents", border_style="green", header_style="bold yellow")
+                    table.add_column("Role", style="bold green")
+                    table.add_column("Description", style="white")
+                    for role, desc in SUBAGENT_ROLES.items():
+                        table.add_row(role, desc)
+                    console.print(table)
+                elif arg1 == "set" and arg2:
+                    if arg2 in SUBAGENT_ROLES:
+                        active_subagent = arg2
+                        messages = get_initial_messages(active_subagent)
+                        console.print(f"[green]Switched subagent to [bold]{active_subagent}[/bold]. History reset.[/green]")
+                    else:
+                        console.print(f"[red]Unknown role: {arg2}. Use `/subagent list`.[/red]")
+                else:
+                    console.print("[red]Usage: /subagent list | /subagent set <role>[/red]")
 
-            console.print("\n[bold green]DOOM[/bold green]:")
-            collected_response = ""
+            elif cmd == "/session":
+                if arg1 == "save" and arg2:
+                    storage.save_session(arg2, ollama_client.model_name, messages)
+                    console.print(f"[green]Session sealed in archives as `{arg2}`.[/green]")
+                elif arg1 == "load" and arg2:
+                    loaded = storage.load_session(arg2)
+                    if loaded:
+                        messages = loaded["messages"]
+                        ollama_client.model_name = loaded.get("model", ollama_client.model_name)
+                        console.print(f"[green]Session `{arg2}` restored ({len(messages)} messages).[/green]")
+                    else:
+                        console.print(f"[red]Could not load session: {arg2}[/red]")
+                elif arg1 == "list":
+                    sessions = storage.list_sessions()
+                    if not sessions:
+                        console.print("[yellow]No archived sessions found.[/yellow]")
+                    else:
+                        table = Table(title="Archived Sessions", border_style="green", header_style="bold yellow")
+                        table.add_column("Name", style="bold green")
+                        table.add_column("Created", style="yellow")
+                        table.add_column("Model", style="cyan")
+                        table.add_column("Messages", style="dim white")
+                        for s in sessions:
+                            table.add_row(s["name"], s["created_at"], s["model"], str(s["message_count"]))
+                        console.print(table)
+                else:
+                    console.print("[red]Usage: /session save <name> | /session load <name> | /session list[/red]")
 
-            with console.status(
-                f"[dim cyan]Thinking ({CURRENT_SUBAGENT})...[/dim cyan]", spinner="dots"
-            ):
-                tokens = []
-                for token in ai_client.stream_chat(conversation_history):
-                    tokens.append(token)
-                collected_response = "".join(tokens)
+            elif cmd == "/model":
+                list_models_fn = getattr(ollama_client, "get_installed_models", getattr(ollama_client, "list_models", None))
+                if arg1 == "list":
+                    models = list_models_fn() if list_models_fn else []
+                    table = Table(title="Installed Models", border_style="green", header_style="bold yellow")
+                    table.add_column("Model Tag", style="bold green")
+                    for m in models:
+                        table.add_row(m)
+                    console.print(table)
+                elif arg1 == "set" and arg2:
+                    ollama_client.model_name = arg2
+                    console.print(f"[green]Active model set to [bold]{arg2}[/bold].[/green]")
+                else:
+                    console.print(f"[dim]Active model: {ollama_client.model_name}[/dim]")
+                    console.print("[dim]Usage: /model list | /model set <model_name>[/dim]")
 
-            console.print(Markdown(collected_response))
-            console.print()
+            elif cmd == "/theme":
+                themes = ["monokai", "dracula", "solarized-dark", "nord", "one-dark"]
+                if arg1 == "list":
+                    console.print(f"[dim]Available themes:[/dim] {', '.join(themes)}")
+                elif arg1 == "set" and arg2:
+                    if arg2 in themes:
+                        current_theme = arg2
+                        console.print(f"[green]Syntax theme set to [bold]{current_theme}[/bold].[/green]")
+                    else:
+                        console.print(f"[red]Invalid theme. Options: {', '.join(themes)}[/red]")
+                else:
+                    console.print(f"[dim]Current theme: {current_theme}[/dim]")
+                    console.print("[dim]Usage: /theme list | /theme set <theme_name>[/dim]")
 
-            conversation_history.append(
-                {"role": "assistant", "content": collected_response}
-            )
+            elif cmd == "/mcp":
+                if arg1 == "list":
+                    tools = mcp.get_all_tools()
+                    if not tools:
+                        console.print("[yellow]No MCP servers connected or no tools found in `.doom/mcp_servers.json`.[/yellow]")
+                    else:
+                        table = Table(title="Connected MCP Tools", border_style="green", header_style="bold yellow")
+                        table.add_column("Server", style="yellow")
+                        table.add_column("Tool Name", style="bold green")
+                        table.add_column("Description", style="white")
+                        for t in tools:
+                            table.add_row(t.get("server", ""), t.get("name", ""), t.get("description", ""))
+                        console.print(table)
+                elif arg1 == "call" and arg2:
+                    try:
+                        args_dict = json.loads(arg3) if arg3.strip() else {}
+                        result_str = mcp.call_tool(arg2, args_dict)
+                        console.print(Panel(result_str, title=f"⚜ MCP Result: {arg2} ⚜", border_style="green"))
+                    except json.JSONDecodeError:
+                        console.print(
+                            '[red]Invalid JSON arguments. Example: `/mcp call sqlite_list_tables {"db_path": "dev.db"}`[/red]'
+                        )
+                    except Exception as ex:
+                        console.print(f"[red]Failed to call tool: {ex}[/red]")
+                else:
+                    console.print("[dim]Usage: /mcp list | /mcp call <tool_name> [json_arguments][/dim]")
 
-        except KeyboardInterrupt:
-            console.print("\n[dim]Session interrupted. Exiting...[/dim]")
-            break
-        except Exception as err:
-            console.print(f"\n[bold red]Runtime Error:[/bold red] {err}\n")
+            else:
+                console.print(f"[red]Unknown command: {cmd}. Type `/help` for available commands.[/red]")
+
+        else:
+            last_assistant_response = handle_chat_turn(user_input, messages, ollama_client, mcp)
+
+    mcp.shutdown()
+
+
+def cli_entry() -> None:
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Process terminated.[/dim]")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry()

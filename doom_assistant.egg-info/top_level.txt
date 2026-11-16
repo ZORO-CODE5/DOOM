@@ -1,0 +1,8 @@
+context
+main
+mcp_client
+ollama_client
+prompts
+runner
+snapshots
+storage
