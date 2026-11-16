@@ -1,4 +1,4 @@
-"""Snapshot and rollback management for NEXUS."""
+"""Snapshot and rollback management for DOOM."""
 
 from datetime import datetime
 from pathlib import Path
@@ -6,11 +6,11 @@ import shutil
 
 
 class SnapshotManager:
-    """Creates, lists, and restores file snapshots stored under .nexus/snapshots/."""
+    """Creates, lists, and restores file snapshots stored under .doom/snapshots/."""
 
     def __init__(self, workspace_root: Path):
         self.workspace_root = workspace_root
-        self.snapshots_dir = workspace_root / ".nexus" / "snapshots"
+        self.snapshots_dir = workspace_root / ".doom" / "snapshots"
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
 
     def create_snapshot(self, relative_path_str: str) -> tuple[bool, str]:

@@ -1,4 +1,4 @@
-"""Safe subprocess execution engine for NEXUS."""
+"""Safe subprocess execution engine for DOOM."""
 
 import subprocess
 import time

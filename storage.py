@@ -1,4 +1,4 @@
-"""Session persistence and local state storage for NEXUS using Pydantic."""
+"""Session persistence and local state storage for DOOM using Pydantic."""
 
 from datetime import datetime
 import json
@@ -14,7 +14,7 @@ class ChatMessage(BaseModel):
 
 
 class SessionData(BaseModel):
-    """Schema for a saved NEXUS session."""
+    """Schema for a saved DOOM session."""
 
     session_name: str
     created_at: str = Field(
@@ -25,10 +25,10 @@ class SessionData(BaseModel):
 
 
 class SessionStorage:
-    """Manages reading and writing saved session files in .nexus/sessions/."""
+    """Manages reading and writing saved session files in .doom/sessions/."""
 
     def __init__(self, workspace_root: Path):
-        self.sessions_dir = workspace_root / ".nexus" / "sessions"
+        self.sessions_dir = workspace_root / ".doom" / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def save_session(
@@ -62,7 +62,7 @@ class SessionStorage:
             session_file.write_text(
                 session.model_dump_json(indent=2), encoding="utf-8"
             )
-            return True, f"Session saved to '.nexus/sessions/{clean_name}.json'."
+            return True, f"Session saved to '.doom/sessions/{clean_name}.json'."
 
         except Exception as e:
             return False, f"Failed to save session: {e}"

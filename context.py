@@ -1,4 +1,4 @@
-"""Context management and workspace file operations for NEXUS."""
+"""Context management and workspace file operations for DOOM."""
 
 from pathlib import Path
 import re
@@ -11,7 +11,7 @@ class ProjectContext:
         ".venv",
         "venv",
         ".git",
-        ".nexus",
+        ".doom",
         "__pycache__",
         ".idea",
         ".vscode",

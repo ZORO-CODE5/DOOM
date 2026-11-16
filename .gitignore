@@ -8,13 +8,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# NEXUS local state, backups, and sessions
-.nexus/
+# DOOM local state, backups, and sessions
+.doom/
 
 # VS Code settings
 .vscode/
 
-# Temporary test files created during development
+# Temporary test files
 buggy_app.py
 math_utils.py
 test_math.py

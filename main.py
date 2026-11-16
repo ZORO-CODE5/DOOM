@@ -1,4 +1,4 @@
-"""NEXUS entry point, interactive loop, and command router."""
+"""DOOM entry point, interactive loop, and command router."""
 
 import re
 import sys
@@ -39,7 +39,7 @@ CURRENT_SUBAGENT = "default"
 
 def display_welcome(model_name: str, workspace_name: str, theme_name: str, subagent_role: str):
     welcome_text = (
-        "[bold cyan]NEXUS[/bold cyan] - Local AI Coding Companion\n"
+        "[bold cyan]DOOM[/bold cyan] - Local AI Coding Companion\n"
         "[dim]Tagline: Think. Build. Execute.[/dim]\n\n"
         f"Active Model:    [green]{model_name}[/green]\n"
         f"Active Subagent: [cyan]{subagent_role.upper()}[/cyan]\n"
@@ -63,7 +63,7 @@ def display_welcome(model_name: str, workspace_name: str, theme_name: str, subag
         "  [yellow]/session <save|load|list>[/yellow] - Manage conversation checkpoints\n"
         "  [yellow]/clear[/yellow]                   - Reset conversation memory\n"
         "  [yellow]/help[/yellow]                    - Show command list\n"
-        "  [yellow]/exit[/yellow]                    - Exit NEXUS"
+        "  [yellow]/exit[/yellow]                    - Exit DOOM"
     )
     console.print(
         Panel(welcome_text, title="[bold]Welcome[/bold]", border_style="cyan")
@@ -72,7 +72,7 @@ def display_welcome(model_name: str, workspace_name: str, theme_name: str, subag
 
 def show_help():
     help_content = """
-### NEXUS Commands
+### DOOM Commands
 
 * **/subagent list** - View available specialized personas (default, architect, security, tester).
 * **/subagent set <role>** - Activate a specialized subagent for domain-focused reasoning.
@@ -177,7 +177,7 @@ def handle_add_command(
         ),
     })
 
-    console.print(f"[green]Added `{file_path}` to NEXUS context.[/green]\n")
+    console.print(f"[green]Added `{file_path}` to DOOM context.[/green]\n")
 
 
 def extract_code_block(markdown_text: str) -> str:
@@ -216,7 +216,7 @@ def handle_save_command(
         else "[bold green]CREATE[/bold green]"
     )
 
-    prompt_question = f"Do you want NEXUS to {action_label} '[cyan]{target_file}[/cyan]' ({len(code_to_write.splitlines())} lines)?"
+    prompt_question = f"Do you want DOOM to {action_label} '[cyan]{target_file}[/cyan]' ({len(code_to_write.splitlines())} lines)?"
     if not Confirm.ask(prompt_question, default=False):
         console.print("[dim]Save cancelled by user.[/dim]\n")
         return
@@ -316,7 +316,7 @@ def handle_plan_command(
     plan_message = get_planning_message(task)
     conversation_history.append(plan_message)
 
-    console.print(f"\n[bold magenta]NEXUS [PLANNING][/bold magenta]:")
+    console.print(f"\n[bold magenta]DOOM [PLANNING][/bold magenta]:")
     collected_response = ""
 
     with console.status(
@@ -356,7 +356,7 @@ def handle_review_command(
     review_message = get_review_message(file_path, content)
     conversation_history.append(review_message)
 
-    console.print(f"\n[bold blue]NEXUS [CODE REVIEW: {file_path}][/bold blue]:")
+    console.print(f"\n[bold blue]DOOM [CODE REVIEW: {file_path}][/bold blue]:")
     collected_response = ""
 
     with console.status(
@@ -398,7 +398,7 @@ def handle_fix_command(
     fix_message = get_fix_message(file_path, content, error_ctx)
     conversation_history.append(fix_message)
 
-    console.print(f"\n[bold yellow]NEXUS [DIAGNOSTICS & FIX: {file_path}][/bold yellow]:")
+    console.print(f"\n[bold yellow]DOOM [DIAGNOSTICS & FIX: {file_path}][/bold yellow]:")
     collected_response = ""
 
     with console.status(
@@ -450,7 +450,7 @@ def handle_research_command(
     research_msg = get_research_message(query, matches)
     conversation_history.append(research_msg)
 
-    console.print(f"[bold cyan]NEXUS [RESEARCH ANALYSIS: '{query}']:[/bold cyan]")
+    console.print(f"[bold cyan]DOOM [RESEARCH ANALYSIS: '{query}']:[/bold cyan]")
     collected_response = ""
 
     with console.status(
@@ -678,7 +678,7 @@ def handle_session_command(
             console.print("[dim]No saved sessions found.[/dim]\n")
             return conversation_history
 
-        table = Table(title="Saved NEXUS Sessions", border_style="cyan")
+        table = Table(title="Saved DOOM Sessions", border_style="cyan")
         table.add_column("Session Name", style="cyan")
         table.add_column("Saved Date", style="dim")
         table.add_column("History Length", justify="right")
@@ -719,7 +719,7 @@ def main():
 
     while True:
         try:
-            user_input = Prompt.ask("[bold cyan]NEXUS[/bold cyan]").strip()
+            user_input = Prompt.ask("[bold cyan]DOOM[/bold cyan]").strip()
 
             if not user_input:
                 continue
@@ -729,7 +729,7 @@ def main():
             arg = parts[1] if len(parts) > 1 else ""
 
             if cmd in ["/exit", "/quit"]:
-                console.print("[dim]Shutting down NEXUS. Happy coding![/dim]")
+                console.print("[dim]Shutting down DOOM. Happy coding![/dim]")
                 break
 
             if cmd == "/clear":
@@ -823,7 +823,7 @@ def main():
             # Standard chat flow
             conversation_history.append({"role": "user", "content": user_input})
 
-            console.print("\n[bold green]NEXUS[/bold green]:")
+            console.print("\n[bold green]DOOM[/bold green]:")
             collected_response = ""
 
             with console.status(

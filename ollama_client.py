@@ -1,4 +1,4 @@
-"""Ollama communication layer for NEXUS."""
+"""Ollama communication layer for DOOM."""
 
 from typing import Generator
 import ollama
