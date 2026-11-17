@@ -50,53 +50,44 @@ nexus/
 
 ### Prerequisites
 
-1. **Python 3.10+** installed.
+1. **Python 3.10+** installed and available in PATH.
 2. **[Ollama](https://ollama.com/)** running locally:
-```powershell
+```bash
 ollama pull qwen2.5-coder:3b
 ollama run qwen2.5-coder:3b
-
-```
-
-
-
-### 1. Clone & Install Locally
-
-```powershell
-git clone https://github.com/ZORO-CODE5/NEXUS.git doom
-cd doom
-
-```
-
-#### Option A: Global CLI Access via `pipx` (Recommended)
-
-```powershell
-pip install pipx
-python -m pipx ensurepath
-pipx install -e .
-
-```
-
-*Ensure `C:\Users\<user>\.local\bin` is in your environment `PATH`.*
-
-#### Option B: Virtual Environment
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
-
 ```
 
 ---
 
-## 💻 Usage
+### ⚡ One-Click Automated Quick Install
 
-Run `doom` directly from any folder or project root:
+Clone the repository once to your machine, run the automated installer for your operating system, and the `doom` command will be globally available across all directories:
 
-```powershell
+#### Windows (One-Click)
+```cmd
+git clone https://github.com/ZORO-CODE5/NEXUS.git doom
+cd doom
+install.bat
+```
+> Automatically verifies Python 3.10+, provisions `.venv`, installs all dependencies from `requirements.txt`, and registers the global `doom.cmd` launcher in `%LOCALAPPDATA%\Microsoft\WindowsApps` (in user PATH by default).
+
+#### Linux & macOS (One-Click)
+```bash
+git clone https://github.com/ZORO-CODE5/NEXUS.git doom
+cd doom
+chmod +x install.sh
+./install.sh
+```
+> Automatically creates `.venv`, installs requirements, links the global wrapper script to `~/.local/bin/doom`, and ensures `~/.local/bin` is exported in your shell configuration (`~/.bashrc` or `~/.zshrc`).
+
+---
+
+### 💻 Running DOOM Anywhere
+
+Once installed, open any terminal inside any project folder on your machine and launch DOOM:
+
+```bash
 doom
-
 ```
 
 ### Prompt & Decrees

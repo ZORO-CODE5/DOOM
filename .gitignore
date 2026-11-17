@@ -1,20 +1,40 @@
-# Virtual Environment
+# Virtual Environments
 .venv/
 venv/
 ENV/
+env/
 
 # Python cache & bytecode
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 
 # DOOM local state, backups, and sessions
 .doom/
+.snapshots/
 
-# VS Code settings
+# VS Code settings & workspace
 .vscode/
 
-# Temporary test files
+# Build & packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Database & binary archives
+dev.db
+*.db
+*.sqlite
+*.sqlite3
+*.zip
+*.tar.gz
+
+# Local test scratch & throwaway files
 buggy_app.py
 math_utils.py
+math_test.py
 test_math.py
+grade_analyzer.py
+matrix_demo.py
+test_matrix.py
